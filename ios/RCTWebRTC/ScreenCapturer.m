@@ -28,6 +28,7 @@ const NSUInteger kMaxReadLength = 10 * 1024;
 @interface Message ()
 
 @property (nonatomic, assign) CVImageBufferRef imageBuffer;
+@property (nonatomic, assign) int imageOrientation;
 @property (nonatomic, assign) CFHTTPMessageRef framedMessage;
 
 @end
@@ -89,6 +90,7 @@ const NSUInteger kMaxReadLength = 10 * 1024;
 - (BOOL)unwrapMessage:(CFHTTPMessageRef)framedMessage {
     size_t width = [CFBridgingRelease(CFHTTPMessageCopyHeaderFieldValue(_framedMessage, (__bridge CFStringRef)@"Buffer-Width")) integerValue];
     size_t height = [CFBridgingRelease(CFHTTPMessageCopyHeaderFieldValue(_framedMessage, (__bridge CFStringRef)@"Buffer-Height")) integerValue];
+    _imageOrientation = [CFBridgingRelease(CFHTTPMessageCopyHeaderFieldValue(_framedMessage, (__bridge CFStringRef)@"Buffer-Orientation")) intValue];
     
     NSData *messageData = CFBridgingRelease(CFHTTPMessageCopyBody(_framedMessage));
     
@@ -166,7 +168,7 @@ const NSUInteger kMaxReadLength = 10 * 1024;
         __weak __typeof__(self) weakSelf = self;
         self.message.didComplete = ^(BOOL success, Message *message) {
             if (success) {
-                [weakSelf didCaptureVideoFrame:message.imageBuffer];
+                [weakSelf didCaptureVideoFrame:message];
             }
             
             weakSelf.message = nil;
@@ -186,7 +188,7 @@ const NSUInteger kMaxReadLength = 10 * 1024;
     }
 }
 
-- (void)didCaptureVideoFrame:(CVPixelBufferRef)pixelBuffer {
+- (void)didCaptureVideoFrame:(Message *)message {
     int64_t currentTime = mach_absolute_time();
     int64_t currentTimeStampNs = currentTime * _timebaseInfo.numer / _timebaseInfo.denom;
     
@@ -194,12 +196,30 @@ const NSUInteger kMaxReadLength = 10 * 1024;
         _startTimeStampNs = currentTimeStampNs;
     }
     
+    CVPixelBufferRef pixelBuffer = message.imageBuffer;
+    CGImagePropertyOrientation orientation = message.imageOrientation;
+    
     RTCCVPixelBuffer *rtcPixelBuffer = [[RTCCVPixelBuffer alloc] initWithPixelBuffer: pixelBuffer];
     int64_t frameTimeStampNs = currentTimeStampNs - _startTimeStampNs;
     
-    // TODO: add support for rotation
+    RTCVideoRotation rotation;
+    switch (orientation) {
+        case kCGImagePropertyOrientationLeft:
+            rotation = RTCVideoRotation_90;
+            break;
+        case kCGImagePropertyOrientationDown:
+            rotation = RTCVideoRotation_180;
+            break;
+        case kCGImagePropertyOrientationRight:
+            rotation = RTCVideoRotation_270;
+            break;
+        default:
+            rotation = RTCVideoRotation_0;
+            break;
+    }
+
     RTCVideoFrame *videoFrame = [[RTCVideoFrame alloc] initWithBuffer: rtcPixelBuffer
-                                                             rotation: RTCVideoRotation_0
+                                                             rotation: rotation
                                                           timeStampNs: frameTimeStampNs];
 
     [self.delegate capturer:self didCaptureVideoFrame:videoFrame];
